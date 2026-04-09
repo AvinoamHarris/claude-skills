@@ -62,8 +62,20 @@ export async function process(inputs, ctx) {
 
     totalFound += allFindings.length;
 
-    // --- Phase 3: Verify all findings with weighted expert voting ---
-    const verificationResult = await ctx.task(verifyAllFindingsTask, { projectDir, findings: allFindings, categories });
+    // --- Phase 3: Verify all findings with 3 independent expert judges in parallel ---
+    const [softwareEngineerScores, dataEngineerScores, securitySpecialistScores] = await ctx.parallel.all([
+      () => ctx.task(softwareEngineerJudgeTask, { projectDir, findings: allFindings }),
+      () => ctx.task(dataEngineerJudgeTask, { projectDir, findings: allFindings }),
+      () => ctx.task(securitySpecialistJudgeTask, { projectDir, findings: allFindings }),
+    ]);
+
+    // --- Phase 3b: Merge judge scores with weighted scoring + expert veto ---
+    const verificationResult = await ctx.task(mergeJudgeScoresTask, {
+      findings: allFindings,
+      softwareEngineerScores: softwareEngineerScores.scores || [],
+      dataEngineerScores: dataEngineerScores.scores || [],
+      securitySpecialistScores: securitySpecialistScores.scores || [],
+    });
     const verifiedFindings = verificationResult.verified || [];
     const needsAttentionFindings = verificationResult.needsAttention || [];
     const falsePositives = verificationResult.dismissed || [];
@@ -431,73 +443,153 @@ const VERIFIED_THRESHOLD = 50;
 const NEEDS_ATTENTION_THRESHOLD = 30;
 const EXPERT_VETO_THRESHOLD = 80;
 
-export const verifyAllFindingsTask = defineTask('verify-all-findings', (args) => ({
+function createJudgeInstructions(judgeName, focusAreas, expertCategories, args) {
+  return [
+    `You are a ${judgeName}. You are ONE of 3 independent judges evaluating bug findings.`,
+    `You do NOT see the other judges' scores. Score each finding independently.`,
+    '',
+    `YOUR FOCUS AREAS: ${focusAreas}`,
+    `YOUR EXPERT CATEGORIES: ${expertCategories.join(', ')}`,
+    '',
+    'FOR EACH FINDING:',
+    '1. Read the actual source file at the reported location',
+    '2. Evaluate whether this is a real bug from YOUR specialist perspective',
+    '3. Score your CONFIDENCE (0-100) that this is a real bug',
+    '   0 = definitely not a bug, 100 = absolutely certain it is a bug',
+    '4. Provide a brief reasoning for your score',
+    '',
+    `Project root: ${args.projectDir}`,
+    '',
+    'BE SKEPTICAL. Many findings are false positives because:',
+    '- The issue is handled by a caller or wrapper',
+    '- The code path is unreachable in practice',
+    '- The framework/language provides built-in safety',
+    '- The "bug" is actually intentional behavior',
+    '- The finding is a style preference, not a bug',
+    '',
+    'REQUIRE evidence from reading the actual code. Do not guess.',
+    '',
+    'FINDINGS TO EVALUATE:',
+    JSON.stringify(args.findings, null, 2),
+    '',
+    'IMPORTANT: You are executing a SINGLE TASK in a babysitter-orchestrated pipeline.',
+    'Do ONLY scoring. Do NOT fix bugs or take any other action.',
+    '',
+    'Return ONLY JSON (no markdown):',
+    '{"scores": [{"findingId": "...", "confidence": N, "reasoning": "..."}]}',
+  ];
+}
+
+export const softwareEngineerJudgeTask = defineTask('judge-software-engineer', (args) => ({
   kind: 'agent',
-  title: `Verify ${args.findings.length} findings with weighted expert voting (3 specialist judges)`,
+  title: `Judge 1/3: Software Engineer evaluates ${args.findings.length} findings`,
   agent: {
     name: 'general-purpose',
     prompt: {
-      role: 'Panel of 3 specialist judges performing weighted expert voting on bug verification',
-      task: `For each of the ${args.findings.length} reported bugs, evaluate using 3 specialist judges with weighted confidence scoring. Each judge scores their confidence (0-100) that each finding is a real bug. The domain expert for each finding's category gets double weight.`,
+      role: 'Senior Software Engineer specializing in code correctness and test quality',
+      task: `Independently score ${args.findings.length} bug findings from your specialist perspective. You are 1 of 3 judges — you do NOT see the other judges' scores.`,
+      instructions: createJudgeInstructions(
+        'Senior Software Engineer',
+        'code correctness, logic errors, edge cases, null safety, error handling, test coverage gaps, convention violations, contract drift',
+        ['logic', 'error-handling', 'test-gaps', 'conventions', 'contract-drift'],
+        args,
+      ),
+      outputFormat: 'JSON',
+    },
+  },
+}));
+
+export const dataEngineerJudgeTask = defineTask('judge-data-engineer', (args) => ({
+  kind: 'agent',
+  title: `Judge 2/3: Data/Infrastructure Engineer evaluates ${args.findings.length} findings`,
+  agent: {
+    name: 'general-purpose',
+    prompt: {
+      role: 'Senior Data Engineer specializing in SQL, data pipelines, and data integrity',
+      task: `Independently score ${args.findings.length} bug findings from your specialist perspective. You are 1 of 3 judges — you do NOT see the other judges' scores.`,
+      instructions: createJudgeInstructions(
+        'Senior Data/Infrastructure Engineer',
+        'data integrity, SQL correctness (JOINs, NULLs, aggregations, fan-out), pipeline dependencies, CDC data flow, resource configuration, BigQuery/MongoDB interactions',
+        ['sql-logic', 'data-integrity', 'resource-config', 'pipeline-logic'],
+        args,
+      ),
+      outputFormat: 'JSON',
+    },
+  },
+}));
+
+export const securitySpecialistJudgeTask = defineTask('judge-security-specialist', (args) => ({
+  kind: 'agent',
+  title: `Judge 3/3: Security & Systems Specialist evaluates ${args.findings.length} findings`,
+  agent: {
+    name: 'general-purpose',
+    prompt: {
+      role: 'Senior Security and Systems Engineer specializing in vulnerabilities, memory safety, and concurrency',
+      task: `Independently score ${args.findings.length} bug findings from your specialist perspective. You are 1 of 3 judges — you do NOT see the other judges' scores.`,
+      instructions: createJudgeInstructions(
+        'Security & Systems Specialist',
+        'security vulnerabilities, injection attacks, auth bypass, memory leaks, resource cleanup, concurrency/race conditions, performance bottlenecks, thread safety',
+        ['security', 'memory-lifecycle', 'performance', 'thread-safety'],
+        args,
+      ),
+      outputFormat: 'JSON',
+    },
+  },
+}));
+
+export const mergeJudgeScoresTask = defineTask('merge-judge-scores', (args) => ({
+  kind: 'agent',
+  title: `Merge 3 independent judge scores for ${args.findings.length} findings with weighted scoring`,
+  agent: {
+    name: 'general-purpose',
+    prompt: {
+      role: 'Impartial scoring coordinator merging independent judge evaluations',
+      task: `Merge scores from 3 independent judges into a final classification for each of ${args.findings.length} findings. Apply domain-weighted scoring and expert veto rules.`,
       instructions: [
-        'You are simulating a panel of 3 SPECIALIST judges, each with a distinct expertise:',
+        'You have received INDEPENDENT scores from 3 specialist judges who did NOT see each other\'s evaluations.',
         '',
-        'JUDGE 1 — Software Engineer:',
-        '  Focus: code correctness, logic errors, edge cases, error handling, test coverage gaps',
-        '  Expert categories: logic, error-handling, test-gaps, conventions, contract-drift',
+        'JUDGES AND THEIR EXPERT CATEGORIES:',
+        '  Software Engineer: logic, error-handling, test-gaps, conventions, contract-drift',
+        '  Data Engineer: sql-logic, data-integrity, resource-config, pipeline-logic',
+        '  Security Specialist: security, memory-lifecycle, performance, thread-safety',
         '',
-        'JUDGE 2 — Data/Infrastructure Engineer:',
-        '  Focus: data integrity, SQL correctness, pipeline dependencies, resource configuration',
-        '  Expert categories: sql-logic, data-integrity, resource-config, pipeline-logic',
+        'SCORING RULES:',
+        `  Expert Weight Multiplier: ${EXPERT_WEIGHT_MULTIPLIER}x (expert judge gets double weight)`,
+        '  For each finding, identify which judge is the domain expert based on the finding\'s category.',
+        '  Compute: weightedAverage = sum(score × weight) / sum(weights)',
+        '    where expert weight = 2, non-expert weight = 1, so sum(weights) = 4',
         '',
-        'JUDGE 3 — Security & Systems Specialist:',
-        '  Focus: security vulnerabilities, memory safety, concurrency, performance bottlenecks',
-        '  Expert categories: security, memory-lifecycle, performance, thread-safety',
+        'CLASSIFICATION:',
+        `  Expert Veto: If the domain expert scored ≥${EXPERT_VETO_THRESHOLD} → VERIFIED (regardless of weighted average)`,
+        `  Weighted average ≥${VERIFIED_THRESHOLD} → VERIFIED`,
+        `  Weighted average ${NEEDS_ATTENTION_THRESHOLD}-${VERIFIED_THRESHOLD - 1} → NEEDS ATTENTION`,
+        `  Weighted average <${NEEDS_ATTENTION_THRESHOLD} → DISMISSED`,
         '',
-        'FOR EACH FINDING:',
-        '1. Read the actual source file at the reported location',
-        '2. Each judge independently scores their CONFIDENCE (0-100) that this is a real bug',
-        '3. The judge whose expertise matches the finding category gets DOUBLE WEIGHT (×2)',
-        '4. Compute weighted average: sum(score × weight) / sum(weights)',
-        '',
-        'CLASSIFICATION RULES:',
-        `- Expert Veto: If the domain expert scores ≥${EXPERT_VETO_THRESHOLD}, the finding is VERIFIED regardless of other scores`,
-        `- Weighted average ≥${VERIFIED_THRESHOLD}: VERIFIED`,
-        `- Weighted average ${NEEDS_ATTENTION_THRESHOLD}-${VERIFIED_THRESHOLD - 1}: NEEDS ATTENTION (borderline — include expert reasoning)`,
-        `- Weighted average <${NEEDS_ATTENTION_THRESHOLD}: DISMISSED`,
-        '',
-        'Category-to-expert mapping:',
+        'CATEGORY-TO-EXPERT MAPPING:',
         JSON.stringify(CATEGORY_TO_EXPERT, null, 2),
         '',
-        `Project root: ${args.projectDir}`,
+        'JUDGE SCORES:',
         '',
-        'BE SKEPTICAL. Many findings are false positives because:',
-        '- The issue is handled by a caller or wrapper',
-        '- The code path is unreachable in practice',
-        '- The framework/language provides built-in safety',
-        '- The "bug" is actually intentional behavior',
-        '- The finding is a style preference, not a bug',
+        'Software Engineer scores:',
+        JSON.stringify(args.softwareEngineerScores, null, 2),
         '',
-        'REQUIRE 2+ INDEPENDENT EVIDENCE SIGNALS per verified finding:',
-        '- Evidence from reading the code at the reported location',
-        '- Evidence from reading callers/consumers of the code',
-        '- Evidence from framework documentation or language spec',
-        '- Evidence from test coverage (or lack thereof)',
-        'A single "the code looks wrong" is NOT sufficient.',
+        'Data Engineer scores:',
+        JSON.stringify(args.dataEngineerScores, null, 2),
         '',
-        'FINDINGS TO VERIFY:',
-        JSON.stringify(args.findings, null, 2),
+        'Security Specialist scores:',
+        JSON.stringify(args.securitySpecialistScores, null, 2),
         '',
-        'For each finding, read the source file and evaluate.',
+        'ORIGINAL FINDINGS (for category lookup):',
+        JSON.stringify(args.findings.map(f => ({ id: f.id, category: f.category, file: f.file, title: f.title })), null, 2),
         '',
         'IMPORTANT: You are executing a SINGLE TASK in a babysitter-orchestrated pipeline.',
-        'Do ONLY verification. Do NOT fix bugs or take any other action.',
+        'Do ONLY score merging and classification. Do NOT fix bugs or take any other action.',
         '',
         'Return ONLY JSON (no markdown):',
         '{',
-        '  "verified": [<findings with weightedAverage >= 50 OR expert veto, with added fields: "judgeScores": {"softwareEngineer": N, "dataEngineer": N, "securitySpecialist": N}, "expertJudge": "which judge is expert", "weightedAverage": N, "expertVeto": bool, "evidence": "...">],',
-        '  "needsAttention": [<findings with weightedAverage 30-49, same fields plus "expertReasoning": "why the expert flagged this">],',
-        '  "dismissed": [<findings with weightedAverage < 30, with "judgeScores" and "reason" fields>]',
+        '  "verified": [<findings with weightedAverage >= 50 OR expert veto. Include ALL original finding fields plus: "judgeScores": {"softwareEngineer": N, "dataEngineer": N, "securitySpecialist": N}, "expertJudge": "which judge", "weightedAverage": N, "expertVeto": true/false, "evidence": "combined reasoning from judges">],',
+        '  "needsAttention": [<findings with weightedAverage 30-49. Same fields plus "expertReasoning": "domain expert reasoning for flagging this">],',
+        '  "dismissed": [<findings with weightedAverage < 30. Include "judgeScores", "weightedAverage", "reason": "why dismissed">]',
         '}',
       ],
       outputFormat: 'JSON',

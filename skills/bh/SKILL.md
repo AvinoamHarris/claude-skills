@@ -97,7 +97,7 @@ BRANCH PRE-CHECK
 → DETECT
 → SCAN (6 categories IN PARALLEL)
 → DEDUP
-→ VERIFY (weighted expert vote)
+→ VERIFY (3 independent expert judges IN PARALLEL + weighted score merge)
 → PROVE
 → [BREAKPOINT if interactive]
 → TDD: write failing test that reproduces the exact bug (RED)
@@ -157,7 +157,7 @@ Replaces simple majority voting with domain-weighted confidence scoring. Three s
 | Weighted average 30-49 | **Needs Attention** | Included in report with expert reasoning, but NOT auto-fixed |
 | Weighted average <30 | **Dismissed** | Filtered out as false positive |
 
-**Why 3 judges instead of 5**: Using 3 specialized judges with domain weighting produces better signal than 5 generalist perspectives simulated by a single agent. The expert veto mechanism ensures that a domain specialist's high-confidence finding cannot be overruled by non-experts, solving the key weakness of simple majority voting where critical domain-specific bugs get dismissed.
+**Why 3 independent agents instead of 5 simulated perspectives**: Each judge runs as a **separate parallel agent** (`ctx.parallel.all()`) with its own context — they genuinely cannot see each other's scores. This provides real independence, unlike a single agent simulating multiple "perspectives" where the same LLM biases influence all votes. A 4th agent then merges the scores with weighted rules. The expert veto mechanism ensures that a domain specialist's high-confidence finding cannot be overruled by non-experts.
 
 **Evidence requirement**: Each verified finding still requires 2+ independent evidence signals (code reading, caller analysis, framework docs, test coverage).
 
