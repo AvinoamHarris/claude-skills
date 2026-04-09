@@ -24,12 +24,17 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 ## Current contents
 
 ### Skills
+
 | Skill | Command | Description |
 |-------|---------|-------------|
+| `babysitter-multi-session` | `/babysitter-multi-session` | Generate a `run-sessions.sh` script to chain multiple babysitter yolo sessions sequentially |
 | `bh` | `/bh` | Bug Hunter — scan, TDD-fix, conventions gate, code review, DoD gate, commit |
 | `bh-forever` | `/bh-forever` | Continuous bug hunting loop until convergence score ≥ 90 |
+| `codex-cli` | `/codex-cli` | Codex CLI integration |
+| `gemini` | `/gemini` | Gemini CLI integration |
 
 ### Processes
+
 | Process | Description |
 |---------|-------------|
 | `bug-hunter.js` | Babysitter process driving the full BH pipeline |
