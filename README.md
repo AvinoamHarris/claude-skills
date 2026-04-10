@@ -47,7 +47,7 @@ Standalone bash scripts — copy to any git repo root and run directly. No insta
 
 | Script | Description |
 |--------|-------------|
-| `scripts/issue-loop.sh` | Auto-fix GitHub issues in a loop: for each open issue, runs a plan+deep-verify babysitter session, sleeps 15 min, then runs a TDD implementation session. Closes issues on success, labels `needs-review` on failure. Stops when no open issues remain. Works on any git repo with `gh` + `claude` + `jq`. |
+| `scripts/issue-loop.sh` | Auto-fix GitHub issues in a loop: for each open issue, runs a plan+deep-verify babysitter session, sleeps 15 min, then runs a TDD implementation session. Closes issues on success, labels `needs-review` on failure. Stops when no open issues remain. Works on any git repo with `gh` + `claude` + `jq` + `winpty` (Windows Git Bash). Output streams live to terminal and log. |
 
 ## Adding something new
 
