@@ -30,7 +30,6 @@ SLEEP_BETWEEN_SESSIONS=900   # 15 min between plan session and implement session
 LABEL_IN_PROGRESS="in-progress"
 LABEL_DONE="implemented"
 LABEL_FAILED="needs-review"
-SKIP_LABELS="$LABEL_IN_PROGRESS,$LABEL_FAILED"
 
 # ── colors + logging ─────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -73,9 +72,10 @@ get_next_issue() {
 }
 
 label_issue() {
-  local num=$1 add=$2 remove=$3
-  gh label create "$add" --force 2>/dev/null || true
-  gh issue edit "$num" --add-label "$add" 2>/dev/null || true
+  local num=$1 add=$2 remove=${3:-}
+  if [ -n "$add" ]; then
+    gh issue edit "$num" --add-label "$add" 2>/dev/null || true
+  fi
   if [ -n "$remove" ]; then
     gh issue edit "$num" --remove-label "$remove" 2>/dev/null || true
   fi
@@ -136,21 +136,32 @@ while true; do
 
   ISSUE_NUM=$(echo "$ISSUE_JSON" | jq -r '.number')
   ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
-  # Truncate body for prompt use (avoid massive prompts)
-  ISSUE_BODY=$(echo "$ISSUE_JSON" | jq -r '.body // ""' | head -c 2000)
   PLAN_FILE=".a5c/plans/issue-${ISSUE_NUM}.md"
+  BRIEF_FILE=".a5c/plans/issue-${ISSUE_NUM}-brief.md"
+
+  # Write issue content to a file — avoids ALL shell escaping/injection problems
+  # when the title/body contains quotes, backticks, $ etc.
+  {
+    echo "# Issue #${ISSUE_NUM}: $(echo "$ISSUE_JSON" | jq -r '.title')"
+    echo ""
+    echo "## Body"
+    echo ""
+    echo "$ISSUE_JSON" | jq -r '.body // "(no body)"'
+  } > "$BRIEF_FILE"
 
   log ""
   log "  ${BOLD}Issue #${ISSUE_NUM}:${NC} $ISSUE_TITLE"
+  log "  Brief     : $BRIEF_FILE"
   log "  Plan file : $PLAN_FILE"
 
   # Mark in-progress
-  label_issue "$ISSUE_NUM" "$LABEL_IN_PROGRESS" ""
+  label_issue "$ISSUE_NUM" "$LABEL_IN_PROGRESS"
 
   ISSUE_START=$(date +%s)
 
   # ── SESSION 1: Plan + deep-verify ──────────────────────────
-  SESSION1_PROMPT="You are fixing GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. Issue title: ${ISSUE_TITLE}. Issue body: ${ISSUE_BODY}. Your task for this session: (1) Read the full issue using: gh issue view ${ISSUE_NUM} (2) Thoroughly explore the codebase to understand the root cause. (3) Write a comprehensive implementation plan to ${PLAN_FILE}. The plan must include: root cause analysis, exact files and line numbers to change, specific code changes needed, TDD test strategy (what tests to write first), edge cases, and rollback plan. (4) Run /deep-verify-plan on the plan iteratively until the quality score reaches 95/100. Keep improving the plan until it passes. Save the final verified plan back to ${PLAN_FILE}."
+  # Pass file paths instead of raw content — safe from escaping issues
+  SESSION1_PROMPT="You are fixing GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. The issue summary is in the file ${BRIEF_FILE}. Your task for this session: (1) Read the brief at ${BRIEF_FILE} and the full issue with: gh issue view ${ISSUE_NUM} (2) Thoroughly explore the codebase to understand the root cause. (3) Write a comprehensive implementation plan to ${PLAN_FILE}. The plan must include: root cause analysis, exact files and line numbers to change, specific code changes needed, TDD test strategy (what tests to write first), edge cases, and rollback plan. (4) Run /deep-verify-plan on the plan iteratively until the quality score reaches 95/100. Keep improving the plan until it passes. Save the final verified plan back to ${PLAN_FILE}."
 
   if run_session "Session 1 / Issue #${ISSUE_NUM}: Plan + Deep-Verify" "$SESSION1_PROMPT" "s1"; then
     SESSION1_OK=true
@@ -172,7 +183,7 @@ while true; do
   log "${YELLOW}  Sleep done. Starting implementation.${NC}"
 
   # ── SESSION 2: TDD implementation ──────────────────────────
-  SESSION2_PROMPT="You are implementing the fix for GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. Issue title: ${ISSUE_TITLE}. The verified implementation plan is at ${PLAN_FILE}. Your task: (1) Read the plan at ${PLAN_FILE} carefully. (2) Read the issue with: gh issue view ${ISSUE_NUM} (3) Implement using strict TDD: write a failing test first, then implement the fix to make it pass, for each change. (4) Commit after each passing test group with a clear message referencing issue #${ISSUE_NUM}. (5) Push after every commit. (6) Maintain babysitter quality score above 95. (7) Run the full test suite before finishing. (8) All changes must be production-ready, with no regressions. Do not close the issue yourself — the runner will close it on success."
+  SESSION2_PROMPT="You are implementing the fix for GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. The issue summary is at ${BRIEF_FILE}. The verified implementation plan is at ${PLAN_FILE}. Your task: (1) Read ${BRIEF_FILE} and ${PLAN_FILE} carefully. (2) Read the full issue with: gh issue view ${ISSUE_NUM} (3) Implement using strict TDD: write a failing test first, then implement the fix to make it pass, for each change. (4) Commit after each passing test group with a clear message referencing issue #${ISSUE_NUM}. (5) Push after every commit. (6) Maintain babysitter quality score above 95. (7) Run the full test suite before finishing. (8) All changes must be production-ready, with no regressions. Do not close the issue yourself — the runner will close it on success."
 
   if run_session "Session 2 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION2_PROMPT" "s2"; then
     ISSUE_DURATION=$(( $(date +%s) - ISSUE_START ))
