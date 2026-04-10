@@ -29,18 +29,6 @@ command -v jq     &>/dev/null || { echo "ERROR: 'jq' not found in PATH. Install 
 command -v gh     &>/dev/null || { echo "ERROR: 'gh' not found in PATH. Install GitHub CLI and re-run."; exit 1; }
 command -v claude &>/dev/null || { echo "ERROR: 'claude' not found in PATH. Install Claude CLI and re-run."; exit 1; }
 
-# ── resolve claude runner (winpty on Windows for live streaming) ──
-# winpty needs a native .exe — it can't launch shell scripts.
-# We resolve node + cli.js directly so winpty can launch them.
-CLAUDE_CMD="claude"
-if command -v winpty &>/dev/null; then
-  _CLAUDE_BIN="$(command -v claude)"
-  _CLAUDE_JS="$(dirname "$_CLAUDE_BIN")/node_modules/@anthropic-ai/claude-code/cli.js"
-  if [ -f "$_CLAUDE_JS" ]; then
-    _CLAUDE_JS_WIN="$(cygpath -w "$_CLAUDE_JS" 2>/dev/null || echo "$_CLAUDE_JS")"
-    CLAUDE_CMD="winpty node $_CLAUDE_JS_WIN"
-  fi
-fi
 
 # ── auto-detect repo root ────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,7 +101,7 @@ run_session() {
   log ""
 
   local session_start; session_start=$(date +%s)
-  $CLAUDE_CMD --dangerously-skip-permissions -p "/babysitter:yolo $prompt" 2>&1 | tee -a "$LOG_FILE"
+  claude --dangerously-skip-permissions -p "/babysitter:yolo $prompt" 2>&1 | tee -a "$LOG_FILE"
   local exit_code=${PIPESTATUS[0]}
   local duration=$(( $(date +%s) - session_start ))
 
