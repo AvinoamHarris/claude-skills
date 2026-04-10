@@ -39,6 +39,7 @@ SLEEP_BETWEEN_SESSIONS=900   # 15 min between plan session and implement session
 LABEL_IN_PROGRESS="in-progress"
 LABEL_DONE="implemented"
 LABEL_FAILED="needs-review"
+RATE_LIMIT_SLEEP=3600        # fallback sleep when rate limit is hit (overwritten by parse_reset_seconds)
 
 # ── colors + logging ─────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -67,6 +68,38 @@ log "${BOLD}============================================${NC}"
 for label in "$LABEL_IN_PROGRESS" "$LABEL_DONE" "$LABEL_FAILED"; do
   gh label create "$label" --force 2>/dev/null || true
 done
+
+# ── rate-limit helpers ───────────────────────────────────────
+# Parse "Xpm" / "X:XXam" reset time from output file, return seconds to sleep
+parse_reset_seconds() {
+  local output_file=$1
+  local reset_str
+  reset_str=$(grep -oP '\d+(?::\d+)?[ap]m' "$output_file" 2>/dev/null | head -1)
+  [ -z "$reset_str" ] && { echo 3600; return; }
+  python3 - "$reset_str" <<'PYEOF'
+import sys, re
+from datetime import datetime, timezone, timedelta
+reset_str = sys.argv[1].lower()
+try:
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Asia/Jerusalem")
+    now = datetime.now(tz)
+except Exception:
+    tz = timezone(timedelta(hours=3))
+    now = datetime.now(tz)
+m = re.match(r'(\d+)(?::(\d+))?(am|pm)', reset_str)
+if not m:
+    print(3600); sys.exit()
+hour, minute, period = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+if period == 'pm' and hour != 12: hour += 12
+elif period == 'am' and hour == 12: hour = 0
+reset = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+if reset <= now:
+    reset = reset + timedelta(days=1)
+diff = int((reset - now).total_seconds()) + 120
+print(max(diff, 60))
+PYEOF
+}
 
 # ── helpers ──────────────────────────────────────────────────
 get_next_issue() {
@@ -101,9 +134,19 @@ run_session() {
   log ""
 
   local session_start; session_start=$(date +%s)
-  claude --dangerously-skip-permissions -p "/babysitter:yolo $prompt" 2>&1 | tee -a "$LOG_FILE"
+  local tmp_out; tmp_out=$(mktemp)
+  claude --dangerously-skip-permissions -p "/babysitter:yolo $prompt" 2>&1 | tee -a "$LOG_FILE" | tee "$tmp_out"
   local exit_code=${PIPESTATUS[0]}
   local duration=$(( $(date +%s) - session_start ))
+
+  # Detect rate limit — don't count as failure, caller will sleep+retry
+  if grep -qF "You've hit your limit" "$tmp_out" 2>/dev/null; then
+    RATE_LIMIT_SLEEP=$(parse_reset_seconds "$tmp_out")
+    rm -f "$tmp_out"
+    log "${YELLOW}  ⏸  Rate limited — resets in ${RATE_LIMIT_SLEEP}s. Will retry.${NC}"
+    return 42
+  fi
+  rm -f "$tmp_out"
 
   if [ $exit_code -eq 0 ]; then
     log "${GREEN}  ✓ $session_label DONE${NC} (${duration}s)"
@@ -112,6 +155,30 @@ run_session() {
   fi
 
   return $exit_code
+}
+
+run_with_retry() {
+  local session_label=$1
+  local prompt=$2
+  local max_rl_retries=5
+  local rl_attempts=0
+
+  while [ $rl_attempts -le $max_rl_retries ]; do
+    run_session "$session_label" "$prompt"
+    local rc=$?
+    if [ $rc -eq 42 ]; then
+      rl_attempts=$((rl_attempts + 1))
+      log "${YELLOW}  ⏸  Rate limit hit (attempt $rl_attempts/$max_rl_retries). Sleeping ${RATE_LIMIT_SLEEP}s...${NC}"
+      log "  Will resume at: $(date -d "+${RATE_LIMIT_SLEEP} seconds" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -v +${RATE_LIMIT_SLEEP}S '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '(unknown)')"
+      sleep "$RATE_LIMIT_SLEEP"
+      log "${YELLOW}  Retrying: $session_label${NC}"
+    else
+      return $rc
+    fi
+  done
+
+  log "${RED}  Max rate-limit retries ($max_rl_retries) exceeded for: $session_label${NC}"
+  return 1
 }
 
 # ── main loop ────────────────────────────────────────────────
@@ -165,7 +232,7 @@ while true; do
   # Pass file paths instead of raw content — safe from escaping issues
   SESSION1_PROMPT="You are fixing GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. The issue summary is in the file ${BRIEF_FILE}. Your task for this session: (1) Read the brief at ${BRIEF_FILE} and the full issue with: gh issue view ${ISSUE_NUM} (2) Thoroughly explore the codebase to understand the root cause. (3) Write a comprehensive implementation plan to ${PLAN_FILE}. The plan must include: root cause analysis, exact files and line numbers to change, specific code changes needed, TDD test strategy (what tests to write first), edge cases, and rollback plan. (4) Run /deep-verify-plan on the plan iteratively until the quality score reaches 95/100. Keep improving the plan until it passes. Save the final verified plan back to ${PLAN_FILE}."
 
-  if run_session "Session 1 / Issue #${ISSUE_NUM}: Plan + Deep-Verify" "$SESSION1_PROMPT"; then
+  if run_with_retry "Session 1 / Issue #${ISSUE_NUM}: Plan + Deep-Verify" "$SESSION1_PROMPT"; then
     SESSION1_OK=true
   else
     SESSION1_OK=false
@@ -187,7 +254,7 @@ while true; do
   # ── SESSION 2: TDD implementation ──────────────────────────
   SESSION2_PROMPT="You are implementing the fix for GitHub issue #${ISSUE_NUM} from repo ${REPO_SLUG}. The issue summary is at ${BRIEF_FILE}. The verified implementation plan is at ${PLAN_FILE}. Your task: (1) Read ${BRIEF_FILE} and ${PLAN_FILE} carefully. (2) Read the full issue with: gh issue view ${ISSUE_NUM} (3) Implement using strict TDD: write a failing test first, then implement the fix to make it pass, for each change. (4) Commit after each passing test group with a clear message referencing issue #${ISSUE_NUM}. (5) Push after every commit. (6) Maintain babysitter quality score above 95. (7) Run the full test suite before finishing. (8) All changes must be production-ready, with no regressions. Do not close the issue yourself — the runner will close it on success."
 
-  if run_session "Session 2 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION2_PROMPT"; then
+  if run_with_retry "Session 2 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION2_PROMPT"; then
     ISSUE_DURATION=$(( $(date +%s) - ISSUE_START ))
     log ""
     log "${GREEN}${BOLD}  ✓ Issue #${ISSUE_NUM} FIXED${NC} in ${ISSUE_DURATION}s"
