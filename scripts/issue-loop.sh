@@ -166,13 +166,23 @@ validate_spec() {
   return 0
 }
 
-# Gate 2: plan file exists, has task items, no placeholder text
+# Gate 2: plan file exists, substantial, has task items, no placeholders, not drifted from spec
 validate_plan() {
   local plan_file=$1
+  local spec_file=${2:-}   # optional: used for drift check
+
   if [ ! -s "$plan_file" ]; then
     log "${RED}  ✗ Gate 2 FAIL: plan file missing or empty: $plan_file${NC}"
     return 1
   fi
+
+  local char_count
+  char_count=$(wc -c < "$plan_file")
+  if [ "$char_count" -lt 2000 ]; then
+    log "${RED}  ✗ Gate 2 FAIL: plan too short (${char_count} chars < 2000). Not a real plan.${NC}"
+    return 1
+  fi
+
   local task_count list_count
   # Count checkbox items (- [ ]) AND plain list items (fallback for different plan styles)
   task_count=$(grep -cE '^\s*-\s*\[[ x]\]' "$plan_file" 2>/dev/null || echo 0)
@@ -181,19 +191,38 @@ validate_plan() {
     log "${RED}  ✗ Gate 2 FAIL: plan has only ${task_count} checkbox items / ${list_count} list items. Incomplete plan.${NC}"
     return 1
   fi
+
   # Exclude checklist lines (- [ ] / - [x]) which may legitimately reference these words
   if grep -iE '\bTBD\b|\bTODO\b|\bFIXME\b|implement later|fill in' "$plan_file" 2>/dev/null \
        | grep -qvE '^\s*-\s*\[[ x]\]'; then
     log "${RED}  ✗ Gate 2 FAIL: plan contains placeholder text (TBD/TODO/FIXME).${NC}"
     return 1
   fi
-  log "${GREEN}  ✓ Gate 2 PASS: plan looks valid (${task_count} task items)${NC}"
+
+  # Drift check: at least some file paths from spec should appear in plan
+  if [ -n "$spec_file" ] && [ -s "$spec_file" ]; then
+    local matched=0 total=0
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      total=$((total + 1))
+      grep -qF "$f" "$plan_file" 2>/dev/null && matched=$((matched + 1))
+    done < <(grep -oE '[a-zA-Z0-9_/-]+\.[a-zA-Z]{2,4}' "$spec_file" 2>/dev/null | grep -vE '^\.' | sort -u | head -20)
+    if [ "$total" -gt 0 ] && [ "$matched" -eq 0 ]; then
+      log "${YELLOW}  ⚠ Gate 2 WARNING: plan references none of the ${total} file paths mentioned in spec — possible spec/plan drift${NC}"
+    elif [ "$total" -gt 0 ]; then
+      log "${GREEN}  ✓ Gate 2: plan covers ${matched}/${total} file paths from spec${NC}"
+    fi
+  fi
+
+  log "${GREEN}  ✓ Gate 2 PASS: plan looks valid (${task_count} task items, ${char_count} chars)${NC}"
   return 0
 }
 
-# Gate 3: implementation produced new commits and they are pushed
+# Gate 3: implementation produced new commits, pushed, and no test failures in output
 validate_implementation() {
   local start_sha=$1
+  local output_file=${2:-}   # optional: session output file for test result check
+
   local current_sha
   current_sha=$(git rev-parse HEAD 2>/dev/null || echo "")
   if [ -z "$current_sha" ] || [ "$current_sha" = "$start_sha" ]; then
@@ -203,6 +232,21 @@ validate_implementation() {
   local new_commits
   new_commits=$(git log --oneline "${start_sha}..HEAD" 2>/dev/null | wc -l || echo 0)
   log "${GREEN}  ✓ Gate 3 PASS: ${new_commits} new commit(s) since session start${NC}"
+
+  # Test result check: scan session output for failure signals
+  if [ -n "$output_file" ] && [ -s "$output_file" ]; then
+    local fail_count pass_count
+    fail_count=$(grep -cE '\b(FAILED|ERROR)\b|[0-9]+ failed|test.*failed|AssertionError' "$output_file" 2>/dev/null || echo 0)
+    pass_count=$(grep -cE '[0-9]+ passed|\bPASSED\b|all tests pass(ed)?|✓ [0-9]+' "$output_file" 2>/dev/null || echo 0)
+    if [ "$fail_count" -gt 0 ] && [ "$pass_count" -eq 0 ]; then
+      log "${RED}  ✗ Gate 3 FAIL: test failures detected in session output (${fail_count} failure signals, 0 pass signals)${NC}"
+      return 1
+    elif [ "$fail_count" -gt 0 ]; then
+      log "${YELLOW}  ⚠ Gate 3 WARNING: mixed test signals (${fail_count} fail / ${pass_count} pass) — review manually${NC}"
+    elif [ "$pass_count" -gt 0 ]; then
+      log "${GREEN}  ✓ Gate 3: ${pass_count} test-pass signal(s) found in output${NC}"
+    fi
+  fi
 
   # Push any unpushed commits (handle branches without upstream)
   local unpushed
@@ -245,6 +289,7 @@ label_issue() {
 run_session() {
   local session_label=$1
   local prompt=$2
+  local save_output=${3:-}   # optional: path to save session output for post-analysis
 
   log ""
   log "${BOLD}${BLUE}  ▶ $session_label${NC}"
@@ -267,6 +312,10 @@ run_session() {
     return 42
   fi
 
+  # Save output for gate analysis if requested
+  if [ -n "$save_output" ]; then
+    cp "$tmp_out" "$save_output" 2>/dev/null || true
+  fi
   rm -f "$tmp_out"
 
   if [ $exit_code -eq 0 ]; then
@@ -281,12 +330,13 @@ run_session() {
 run_with_retry() {
   local session_label=$1
   local prompt=$2
+  local save_output=${3:-}   # forwarded to run_session
   local max_rl_retries=5
   local rl_attempts=0
 
   while [ $rl_attempts -le $max_rl_retries ]; do
     local rc=0
-    run_session "$session_label" "$prompt" || rc=$?  # || prevents set -e from killing the script
+    run_session "$session_label" "$prompt" "$save_output" || rc=$?  # || prevents set -e from killing the script
     if [ $rc -eq 42 ]; then
       rl_attempts=$((rl_attempts + 1))
       log "${YELLOW}  ⏸  Rate limit hit (attempt $rl_attempts/$max_rl_retries). Sleeping ${RATE_LIMIT_SLEEP}s...${NC}"
@@ -403,7 +453,7 @@ while true; do
 
   if [ "$EFFECTIVE_START_SESSION" -gt 2 ]; then
     log "  ${YELLOW}  Skipping Session 2 (resuming from Session ${EFFECTIVE_START_SESSION}) — using existing plan: ${PLAN_FILE}${NC}"
-    if ! validate_plan "$PLAN_FILE"; then
+    if ! validate_plan "$PLAN_FILE" "$SPEC_FILE"; then
       log "${RED}  Resume failed: existing plan invalid — re-run without START_SESSION to rebuild.${NC}"
       label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
       TOTAL_FAILED=$((TOTAL_FAILED + 1))
@@ -417,7 +467,7 @@ while true; do
       label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
       continue
     fi
-    if ! { [ $S2_RC -eq 0 ] && validate_plan "$PLAN_FILE"; }; then
+    if ! { [ $S2_RC -eq 0 ] && validate_plan "$PLAN_FILE" "$SPEC_FILE"; }; then
       log "${RED}  Session 2 failed for issue #${ISSUE_NUM} — labeling needs-review${NC}"
       label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
       TOTAL_FAILED=$((TOTAL_FAILED + 1))
@@ -436,14 +486,15 @@ while true; do
   log ""
   log "${BOLD}  ── Session 3: TDD + /verification-before-completion ──${NC}"
 
+  S3_OUTPUT="$PLANS_DIR/issue-${ISSUE_NUM}-session3-output.txt"
   S3_RC=0
-  run_with_retry "Session 3 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION3_PROMPT" || S3_RC=$?
+  run_with_retry "Session 3 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION3_PROMPT" "$S3_OUTPUT" || S3_RC=$?
   if [ $S3_RC -eq 43 ]; then
     log "${YELLOW}  ⏸  Session 3 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
     label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
     continue
   fi
-  if [ $S3_RC -eq 0 ] && validate_implementation "$IMPL_START_SHA"; then
+  if [ $S3_RC -eq 0 ] && validate_implementation "$IMPL_START_SHA" "$S3_OUTPUT"; then
     ISSUE_DURATION=$(( $(date +%s) - ISSUE_START ))
     log ""
     log "${GREEN}${BOLD}  ✓ Issue #${ISSUE_NUM} FIXED${NC} in ${ISSUE_DURATION}s"
