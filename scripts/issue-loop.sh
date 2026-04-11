@@ -181,7 +181,9 @@ validate_plan() {
     log "${RED}  ✗ Gate 2 FAIL: plan has only ${task_count} checkbox items / ${list_count} list items. Incomplete plan.${NC}"
     return 1
   fi
-  if grep -qiE '\bTBD\b|\bTODO\b|\bFIXME\b|implement later|fill in' "$plan_file" 2>/dev/null; then
+  # Exclude checklist lines (- [ ] / - [x]) which may legitimately reference these words
+  if grep -iE '\bTBD\b|\bTODO\b|\bFIXME\b|implement later|fill in' "$plan_file" 2>/dev/null \
+       | grep -qvE '^\s*-\s*\[[ x]\]'; then
     log "${RED}  ✗ Gate 2 FAIL: plan contains placeholder text (TBD/TODO/FIXME).${NC}"
     return 1
   fi
