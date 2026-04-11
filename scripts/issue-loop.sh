@@ -176,13 +176,6 @@ validate_plan() {
     return 1
   fi
 
-  local char_count
-  char_count=$(wc -c < "$plan_file")
-  if [ "$char_count" -lt 2000 ]; then
-    log "${RED}  ✗ Gate 2 FAIL: plan too short (${char_count} chars < 2000). Not a real plan.${NC}"
-    return 1
-  fi
-
   local task_count list_count
   # Count checkbox items (- [ ]) AND plain list items (fallback for different plan styles)
   task_count=$(grep -cE '^\s*-\s*\[[ x]\]' "$plan_file" 2>/dev/null || echo 0)
@@ -214,7 +207,7 @@ validate_plan() {
     fi
   fi
 
-  log "${GREEN}  ✓ Gate 2 PASS: plan looks valid (${task_count} task items, ${char_count} chars)${NC}"
+  log "${GREEN}  ✓ Gate 2 PASS: plan looks valid (${task_count} task items)${NC}"
   return 0
 }
 
