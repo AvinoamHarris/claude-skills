@@ -93,8 +93,9 @@ done
 # ── rate-limit helpers ───────────────────────────────────────
 
 # Multi-pattern rate limit detection — Claude Code expresses this in several ways
+# Note: Claude uses Unicode right-single-quote (') in "You've" — use .{0,2} to match any apostrophe variant
 is_rate_limited() {
-  grep -qiE "(you'?ve hit your (usage |session )?limit|rate.?limit(ed)?|usage limit reached|quota exceeded|limit[[:space:]].{0,30}reset)" "$1" 2>/dev/null
+  grep -qiE "(you.{0,2}ve hit your (usage |session )?limit|hit your.*limit|rate.?limit(ed)?|usage limit reached|quota exceeded|limit.{0,30}reset)" "$1" 2>/dev/null
 }
 
 # Parse "Xpm" / "X:XXam" reset time from output file, return seconds to sleep
@@ -269,8 +270,8 @@ run_with_retry() {
   local rl_attempts=0
 
   while [ $rl_attempts -le $max_rl_retries ]; do
-    run_session "$session_label" "$prompt"
-    local rc=$?
+    local rc=0
+    run_session "$session_label" "$prompt" || rc=$?  # || prevents set -e from killing the script
     if [ $rc -eq 42 ]; then
       rl_attempts=$((rl_attempts + 1))
       log "${YELLOW}  ⏸  Rate limit hit (attempt $rl_attempts/$max_rl_retries). Sleeping ${RATE_LIMIT_SLEEP}s...${NC}"
@@ -345,8 +346,8 @@ while true; do
   log ""
   log "${BOLD}  ── Session 1: Spec + Deep-Verify ──${NC}"
 
-  run_with_retry "Session 1 / Issue #${ISSUE_NUM}: Spec + Deep-Verify" "$SESSION1_PROMPT"
-  S1_RC=$?
+  S1_RC=0
+  run_with_retry "Session 1 / Issue #${ISSUE_NUM}: Spec + Deep-Verify" "$SESSION1_PROMPT" || S1_RC=$?
   if [ $S1_RC -eq 43 ]; then
     log "${YELLOW}  ⏸  Session 1 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
     label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
@@ -367,8 +368,8 @@ while true; do
   log ""
   log "${BOLD}  ── Session 2: /writing-plans ──${NC}"
 
-  run_with_retry "Session 2 / Issue #${ISSUE_NUM}: Writing Plans" "$SESSION2_PROMPT"
-  S2_RC=$?
+  S2_RC=0
+  run_with_retry "Session 2 / Issue #${ISSUE_NUM}: Writing Plans" "$SESSION2_PROMPT" || S2_RC=$?
   if [ $S2_RC -eq 43 ]; then
     log "${YELLOW}  ⏸  Session 2 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
     label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
@@ -389,8 +390,8 @@ while true; do
   log ""
   log "${BOLD}  ── Session 3: TDD + /verification-before-completion ──${NC}"
 
-  run_with_retry "Session 3 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION3_PROMPT"
-  S3_RC=$?
+  S3_RC=0
+  run_with_retry "Session 3 / Issue #${ISSUE_NUM}: TDD Implementation" "$SESSION3_PROMPT" || S3_RC=$?
   if [ $S3_RC -eq 43 ]; then
     log "${YELLOW}  ⏸  Session 3 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
     label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
