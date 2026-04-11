@@ -46,6 +46,16 @@ LABEL_DONE="implemented"
 LABEL_FAILED="needs-review"
 RATE_LIMIT_SLEEP=3600        # fallback sleep when reset time cannot be parsed
 
+# ── resume support ───────────────────────────────────────────
+# Set START_ISSUE to skip all issues with number < this value.
+# Set START_SESSION to skip sessions 1..(N-1) for the first issue processed.
+# After the first issue is processed normally, START_SESSION resets to 1.
+# Examples:
+#   START_ISSUE=5              → start from issue #5 (skip #1–#4)
+#   START_ISSUE=3 START_SESSION=3  → skip to Session 3 of issue #3
+START_ISSUE=${START_ISSUE:-1}
+START_SESSION=${START_SESSION:-1}
+
 # ── colors + logging ─────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
@@ -213,7 +223,10 @@ get_next_issue() {
     --state open \
     --limit 50 \
     --json number,title,body,labels \
-    --jq "[.[] | select(.labels | map(.name) | (contains([\"$LABEL_IN_PROGRESS\"]) or contains([\"$LABEL_FAILED\"])) | not)] | sort_by(.number) | .[0]" \
+    --jq "[.[] | select(
+            (.labels | map(.name) | (contains([\"$LABEL_IN_PROGRESS\"]) or contains([\"$LABEL_FAILED\"])) | not)
+            and (.number >= $START_ISSUE)
+          )] | sort_by(.number) | .[0]" \
     2>/dev/null || echo "null"
 }
 
@@ -314,6 +327,7 @@ while true; do
   ISSUE_NUM=$(echo "$ISSUE_JSON" | jq -r '.number')
   ISSUE_TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
 
+
   BRIEF_FILE="$PLANS_DIR/issue-${ISSUE_NUM}-brief.md"
   SPEC_FILE="$PLANS_DIR/issue-${ISSUE_NUM}-spec.md"
   PLAN_FILE="$PLANS_DIR/issue-${ISSUE_NUM}-plan.md"
@@ -338,6 +352,13 @@ while true; do
   ISSUE_START=$(date +%s)
   IMPL_START_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")
 
+  # Determine the effective start session for this issue (only applies to the first issue processed)
+  EFFECTIVE_START_SESSION=1
+  if [ "$ISSUE_NUM" -eq "$START_ISSUE" ] && [ "$START_SESSION" -gt 1 ]; then
+    EFFECTIVE_START_SESSION=$START_SESSION
+    log "  ${YELLOW}Resuming issue #${ISSUE_NUM} from Session ${EFFECTIVE_START_SESSION} (START_SESSION=${START_SESSION})${NC}"
+  fi
+
   # ──────────────────────────────────────────────────────────────
   # SESSION 1: Spec + /deep-verify-plan
   # ──────────────────────────────────────────────────────────────
@@ -346,18 +367,28 @@ while true; do
   log ""
   log "${BOLD}  ── Session 1: Spec + Deep-Verify ──${NC}"
 
-  S1_RC=0
-  run_with_retry "Session 1 / Issue #${ISSUE_NUM}: Spec + Deep-Verify" "$SESSION1_PROMPT" || S1_RC=$?
-  if [ $S1_RC -eq 43 ]; then
-    log "${YELLOW}  ⏸  Session 1 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
-    label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
-    continue
-  fi
-  if ! { [ $S1_RC -eq 0 ] && validate_spec "$SPEC_FILE"; }; then
-    log "${RED}  Session 1 failed for issue #${ISSUE_NUM} — labeling needs-review${NC}"
-    label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
-    TOTAL_FAILED=$((TOTAL_FAILED + 1))
-    continue
+  if [ "$EFFECTIVE_START_SESSION" -gt 1 ]; then
+    log "  ${YELLOW}  Skipping Session 1 (resuming from Session ${EFFECTIVE_START_SESSION}) — using existing spec: ${SPEC_FILE}${NC}"
+    if ! validate_spec "$SPEC_FILE"; then
+      log "${RED}  Resume failed: existing spec invalid — re-run without START_SESSION to rebuild.${NC}"
+      label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
+      TOTAL_FAILED=$((TOTAL_FAILED + 1))
+      continue
+    fi
+  else
+    S1_RC=0
+    run_with_retry "Session 1 / Issue #${ISSUE_NUM}: Spec + Deep-Verify" "$SESSION1_PROMPT" || S1_RC=$?
+    if [ $S1_RC -eq 43 ]; then
+      log "${YELLOW}  ⏸  Session 1 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
+      label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
+      continue
+    fi
+    if ! { [ $S1_RC -eq 0 ] && validate_spec "$SPEC_FILE"; }; then
+      log "${RED}  Session 1 failed for issue #${ISSUE_NUM} — labeling needs-review${NC}"
+      label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
+      TOTAL_FAILED=$((TOTAL_FAILED + 1))
+      continue
+    fi
   fi
 
   # ──────────────────────────────────────────────────────────────
@@ -368,19 +399,32 @@ while true; do
   log ""
   log "${BOLD}  ── Session 2: /writing-plans ──${NC}"
 
-  S2_RC=0
-  run_with_retry "Session 2 / Issue #${ISSUE_NUM}: Writing Plans" "$SESSION2_PROMPT" || S2_RC=$?
-  if [ $S2_RC -eq 43 ]; then
-    log "${YELLOW}  ⏸  Session 2 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
-    label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
-    continue
+  if [ "$EFFECTIVE_START_SESSION" -gt 2 ]; then
+    log "  ${YELLOW}  Skipping Session 2 (resuming from Session ${EFFECTIVE_START_SESSION}) — using existing plan: ${PLAN_FILE}${NC}"
+    if ! validate_plan "$PLAN_FILE"; then
+      log "${RED}  Resume failed: existing plan invalid — re-run without START_SESSION to rebuild.${NC}"
+      label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
+      TOTAL_FAILED=$((TOTAL_FAILED + 1))
+      continue
+    fi
+  else
+    S2_RC=0
+    run_with_retry "Session 2 / Issue #${ISSUE_NUM}: Writing Plans" "$SESSION2_PROMPT" || S2_RC=$?
+    if [ $S2_RC -eq 43 ]; then
+      log "${YELLOW}  ⏸  Session 2 rate-limit exhausted for issue #${ISSUE_NUM} — skipping (not marking failed)${NC}"
+      label_issue "$ISSUE_NUM" "" "$LABEL_IN_PROGRESS"
+      continue
+    fi
+    if ! { [ $S2_RC -eq 0 ] && validate_plan "$PLAN_FILE"; }; then
+      log "${RED}  Session 2 failed for issue #${ISSUE_NUM} — labeling needs-review${NC}"
+      label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
+      TOTAL_FAILED=$((TOTAL_FAILED + 1))
+      continue
+    fi
   fi
-  if ! { [ $S2_RC -eq 0 ] && validate_plan "$PLAN_FILE"; }; then
-    log "${RED}  Session 2 failed for issue #${ISSUE_NUM} — labeling needs-review${NC}"
-    label_issue "$ISSUE_NUM" "$LABEL_FAILED" "$LABEL_IN_PROGRESS"
-    TOTAL_FAILED=$((TOTAL_FAILED + 1))
-    continue
-  fi
+
+  # After the resume issue, all subsequent issues start from Session 1
+  START_SESSION=1
 
   # ──────────────────────────────────────────────────────────────
   # SESSION 3: TDD implementation + /verification-before-completion
