@@ -185,10 +185,36 @@ validate_plan() {
     return 1
   fi
 
-  # Exclude checklist lines (- [ ] / - [x]) which may legitimately reference these words
-  if grep -iE '\bTBD\b|\bTODO\b|\bFIXME\b|implement later|fill in' "$plan_file" 2>/dev/null \
-       | grep -qvE '^\s*-\s*\[[ x]\]'; then
+  # Placeholder check via Python: strips code fences and negation context before flagging.
+  # Pure grep would false-positive on "zero TBD/TODO/FIXME" (summary prose) or grep commands
+  # inside code blocks that search for those words — both of which /writing-plans produces.
+  local _py_stderr
+  _py_stderr=$(python3 - "$plan_file" 2>&1 <<'PYEOF'
+import sys, re
+content = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+# Strip fenced code blocks (```...```) — their content is commands, not placeholders
+content = re.sub(r'```[\s\S]*?```', '', content)
+bad = []
+for line in content.split('\n'):
+    # Skip checklist lines (- [ ] / - [x]) — may reference these words in task names
+    if re.match(r'^\s*-\s*\[[ x]\]', line):
+        continue
+    # Skip negation context: "no/zero/without TBD", "TBD not found", "zero TODO", etc.
+    if re.search(r'\b(no|zero|without|not found|none|absence of|free of)\b.{0,60}\b(TBD|TODO|FIXME)\b', line, re.IGNORECASE):
+        continue
+    if re.search(r'\b(TBD|TODO|FIXME)\b.{0,60}\b(not found|none found|free|clean|absent|zero|0)\b', line, re.IGNORECASE):
+        continue
+    # Real placeholder — flag it
+    if re.search(r'\b(TBD|TODO|FIXME)\b|implement later|fill in', line, re.IGNORECASE):
+        print(f'  placeholder: {line.strip()[:120]}', file=sys.stderr)
+        bad.append(line)
+if bad:
+    sys.exit(1)
+PYEOF
+  )
+  if [ $? -ne 0 ]; then
     log "${RED}  ✗ Gate 2 FAIL: plan contains placeholder text (TBD/TODO/FIXME).${NC}"
+    [ -n "$_py_stderr" ] && log "$_py_stderr"
     return 1
   fi
 
