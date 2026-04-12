@@ -273,9 +273,10 @@ You are writing an implementation plan for GitHub issue #{ISSUE_NUM} from repo {
 
 Your tasks:
 (1) Read {BRIEF_FILE} and {SPEC_FILE} carefully.
-(2) Invoke the writing-plans skill explicitly using the Skill tool:
-    Skill("superpowers:writing-plans")
-    Follow its instructions to convert the spec into a detailed TDD implementation plan.
+(2) Run babysitter to write the implementation plan using the writing-plans skill:
+    /babysitter:yolo Run the writing-plans skill to produce a TDD implementation plan.
+      Invoke Skill("superpowers:writing-plans") with specFile={SPEC_FILE}, outputFile={PLAN_FILE}
+      Wait for babysitter to complete.
 (3) Save the final plan to {PLAN_FILE}.
 
 The plan must:
@@ -310,9 +311,10 @@ Your tasks:
 (6) Push after every commit.
 (7) Maintain babysitter quality score above 95 throughout.
 (8) Run the full test suite before finishing.
-(9) Invoke the verification-before-completion skill explicitly as the final QA gate:
-    Skill("superpowers:verification-before-completion")
-    Follow its instructions exactly. Fix every issue it raises before continuing.
+(9) Run babysitter to run the final QA gate using the verification-before-completion skill:
+    /babysitter:yolo Run the verification-before-completion skill as the final QA gate.
+      Invoke Skill("superpowers:verification-before-completion")
+      Wait for babysitter to complete. Fix every issue it raises before continuing.
 (10) All changes must be production-ready with no regressions.
 
 Do NOT close the issue yourself — the runner closes it on success.
