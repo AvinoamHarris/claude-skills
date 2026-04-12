@@ -89,19 +89,19 @@ Run via Bash. Increment `ITERATION`. Print a separator:
 Fetch the next issue (sorted by number ascending, skip those labeled `in-progress` or `needs-review`, skip those with number < `START_ISSUE`):
 
 ```bash
-gh issue list \
+ISSUE_JSON=$(gh issue list \
   --state open \
   --limit 50 \
   --json number,title,body,labels \
   --jq "[.[] | select(
           (.labels | map(.name) | (contains([\"in-progress\"]) or contains([\"needs-review\"])) | not)
           and (.number >= $START_ISSUE)
-        )] | sort_by(.number) | .[0]"
+        )] | sort_by(.number) | .[0]")
 ```
 
 If the result is empty or `null`: print `✓ No more open issues. All done!` with the summary, then exit.
 
-Set from the result: `ISSUE_NUM`, `ISSUE_TITLE`.
+Set from the result: `ISSUE_NUM`, `ISSUE_TITLE` (parse from `$ISSUE_JSON`).
 
 Set file paths:
 ```
@@ -239,7 +239,7 @@ When `get_next_issue` returns nothing, print:
 
 ## Session Prompts
 
-Substitute `{ISSUE_NUM}`, `{REPO_SLUG}`, `{BRIEF_FILE}`, `{SPEC_FILE}`, `{PLAN_FILE}` before dispatching.
+Substitute `{ISSUE_NUM}`, `{REPO_SLUG}`, `{BRIEF_FILE}`, `{SPEC_FILE}`, `{PLAN_FILE}`, `{PROJECT_PATH}` before dispatching.
 
 ### Session 1 Prompt
 
@@ -276,8 +276,7 @@ Your tasks:
 (2) Run babysitter to write the implementation plan using the writing-plans skill:
     /babysitter:yolo Run the writing-plans skill to produce a TDD implementation plan.
       Invoke Skill("superpowers:writing-plans") with specFile={SPEC_FILE}, outputFile={PLAN_FILE}
-      Wait for babysitter to complete.
-(3) Save the final plan to {PLAN_FILE}.
+      Wait for babysitter to complete. The skill will write the plan directly to {PLAN_FILE}.
 
 The plan must:
 - Use checkbox (- [ ]) syntax for every step
@@ -301,7 +300,7 @@ You are implementing the fix for GitHub issue #{ISSUE_NUM} from repo {REPO_SLUG}
 
 Your tasks:
 (1) Read {BRIEF_FILE}, {SPEC_FILE}, and {PLAN_FILE} carefully. Also run: gh issue view {ISSUE_NUM}
-(2) Before writing any code, run /coding-standards to load the team coding standards — all code you write MUST comply with those standards.
+(2) Before writing any code, invoke the coding standards skill: Invoke Skill("superpowers:coding-standards") — all code you write MUST comply with those standards.
 (3) Execute the plan using strict TDD: for each task, write a failing test first, then implement the minimum code to make it pass.
 (4) TESTING STRATEGY — detect whether the issue touches frontend (any .tsx/.ts React files, UI components, pages, hooks):
     - If YES: write Playwright CLI tests using 'npx playwright test' (write test files under frontend/tests/ or e2e/, run with 'npx playwright test').
@@ -309,7 +308,7 @@ Your tasks:
     - If both: use both.
 (5) Commit after each passing test group with a clear message referencing issue #{ISSUE_NUM}.
 (6) Push after every commit.
-(7) Maintain babysitter quality score above 95 throughout.
+(7) Maintain code quality: no regressions, no skipped tests, all edge cases from the spec handled.
 (8) Run the full test suite before finishing.
 (9) Run babysitter to run the final QA gate using the verification-before-completion skill:
     /babysitter:yolo Run the verification-before-completion skill as the final QA gate.
