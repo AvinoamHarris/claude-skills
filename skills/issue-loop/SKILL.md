@@ -1,6 +1,6 @@
 ---
 name: issue-loop
-description: Autonomous GitHub issue fixer. For each open issue: Session 1 writes a spec + runs /deep-verify-plan (≥95/100), Session 2 uses /writing-plans to produce a TDD task list, Session 3 implements with TDD + /verification-before-completion then commits and pushes. Quality gates validate each artifact. Loops until no open issues remain. All orchestration events are visible inline in the CC terminal.
+description: "Autonomous GitHub issue fixer. For each open issue: Session 1 writes a spec + runs /deep-verify-plan (≥95/100), Session 2 uses /writing-plans to produce a TDD task list, Session 3 implements with TDD + /verification-before-completion then commits and pushes. Quality gates validate each artifact. Loops until no open issues remain. All orchestration events are visible inline in the CC terminal."
 ---
 
 # Issue Loop
@@ -456,6 +456,6 @@ If detected, the issue is skipped without the `needs-review` label (it will be r
 ## Notes
 
 - The skill auto-detects repo root and slug — works in any git repo with a GitHub remote.
-- All orchestration (issue selection, session start, gate result, label changes) is printed inline in the CC terminal.
+- All orchestration (issue selection, session start, gate result, label changes) is printed inline in the CC terminal."
 - Babysitter sessions handle quality convergence internally (score ≥ 95) using the babysitter:yolo process.
 - `START_SESSION` only applies to the first issue processed; all subsequent issues always start at Session 1.
