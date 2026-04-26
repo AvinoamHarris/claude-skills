@@ -33,6 +33,7 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 | `codex-cli` | `/codex-cli` | Codex CLI integration |
 | `gemini` | `/gemini` | Gemini CLI integration |
 | `deep-verify-plan` | `/deep-verify-plan` | Deep Verify Plan — runs iterative plan QA (6-dimension scan → dedup → prove gaps → self-answer → 3-judge review → quality score 95/100) without any coding |
+| `plan-gap-finder` | `/plan-gap-finder` | Plan Gap Finder — spawns parallel agents (one per codebase area) to cross-reference a plan file against actual code; outputs a structured gap report: planned-but-missing, implemented-but-not-planned, partial |
 
 ### Processes
 
