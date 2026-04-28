@@ -1,6 +1,6 @@
 ---
 name: plan-gap-finder
-description: Use when asked to find gaps between a plan file and the actual codebase. Spawns parallel Claude subagents (one per codebase area: backend, frontend, tests, infrastructure, scripts) each cross-referencing the plan against real code. Aggregates into a structured gap report: planned-but-missing, implemented-but-not-planned, and partial implementations. Works in any git repo.
+description: "Use when asked to find gaps between a plan file and the actual codebase. Spawns parallel Claude subagents (one per codebase area: backend, frontend, tests, infrastructure, scripts) each cross-referencing the plan against real code. Aggregates into a structured gap report: planned-but-missing, implemented-but-not-planned, and partial implementations. Works in any git repo."
 ---
 
 # Plan Gap Finder
