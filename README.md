@@ -34,8 +34,10 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 | `gemini` | `/gemini` | Gemini CLI integration |
 | `deep-verify-plan` | `/deep-verify-plan` | Deep Verify Plan — runs iterative plan QA (6-dimension scan → dedup → prove gaps → self-answer → 3-judge review → quality score 95/100) without any coding |
 | `plan-gap-finder` | `/plan-gap-finder` | Plan Gap Finder — spawns parallel agents (one per codebase area) to cross-reference a plan file against actual code; outputs a structured gap report: planned-but-missing, implemented-but-not-planned, partial |
-| `prd-to-spec` | `/prd-to-spec` | Convert an approved PRD into a phase-gated implementation SPEC with verification ledger, TDD breakpoints, and quality gates. Stack-agnostic with optional integration hooks |
-| `task-to-prd` | `/task-to-prd` | Convert a raw task (tracker ticket / email / text) into a fully characterized PRD via Five Whys + interactive clarification + adversarial review |
+| `prd-to-spec` | `/prd-to-spec` | Convert an approved PRD into a phase-gated implementation SPEC with verification ledger, TDD breakpoints, and quality gates. Dispatches to `prd-to-spec.js` process via `/babysitter:call` or `/babysitter:yolo` |
+| `task-to-prd` | `/task-to-prd` | Convert a raw task (tracker ticket / email / text) into a fully characterized PRD via Five Whys + interactive clarification + adversarial review. Dispatches to `task-to-prd.js` process via `/babysitter:call` or `/babysitter:yolo` |
+
+Note: the `prd-to-spec` and `task-to-prd` skills are thin user-facing wrappers — they parse inputs, ask the user to pick `/babysitter:call` (interactive) or `/babysitter:yolo` (auto-approve), and dispatch to the matching process below.
 
 ### Processes
 
@@ -43,6 +45,8 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 |---------|-------------|
 | `bug-hunter.js` | Babysitter process driving the full BH pipeline |
 | `deep-plan-verification.js` | Phase 0 plan verifier: 6-dimension parallel gap scan → dedup → prove gaps → self-answer → 3-judge review → consistency gate → quality score (target 95/100) |
+| `prd-to-spec.js` | Babysitter process that orchestrates the prd-to-spec skill: discovery (Verification Ledger) → SPEC generation → self-review (+ optional secondary reviewer) → user-approval breakpoint → execution prompt. Stack-agnostic. |
+| `task-to-prd.js` | Babysitter process that orchestrates the task-to-prd skill: source-load + Five Whys → interactive clarification → scope-lock breakpoint → PRD draft → 5 parallel verification checks (+ optional secondary review) → per-finding gate → final approval → optional tracker update + follow-up prompt. Stack-agnostic. |
 
 ### Scripts
 
