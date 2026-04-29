@@ -17,7 +17,7 @@ description: |
 - Served by a Cloud Function at `/pages/<namespaceToken>/<deployId>/`
 - Each URL includes a short HMAC token (`?t=...`) — not secret, just obscures guessability
 - Open CSP so pages can call external APIs (Gemini, etc.)
-- Free tier (Firebase Spark): ~1000 pages before storage concerns
+- **Requires the Blaze (pay-as-you-go) plan.** Cloud Functions v2 — what this skill uses — does not deploy on the Spark free tier. Free quotas on Blaze are very generous (2M function invocations/month, 5 GB storage, 1 GB/day egress), so realistic per-project cost is **$0/month** for typical use. Set a $1 budget alert (`Console → Billing → Budgets & alerts`) as a safety net since Blaze has no automatic spending cap.
 
 ## Phases
 
@@ -41,27 +41,72 @@ pip install -r ~/.claude/skills/firebase-html-deploy/files/requirements.txt
 
 ### Step 1.1 — Create Firebase project
 
-1. Go to https://console.firebase.google.com → "Add project"
-2. Name it (e.g. `my-html-pages`). Disable Google Analytics (not needed).
-3. After creation, note the **Project ID** (shown in project settings, e.g. `my-html-pages-abc12`)
+Either via console (https://console.firebase.google.com → "Add project") or CLI:
 
-### Step 1.2 — Enable Firebase services
+```bash
+firebase login   # one-time, opens browser
+firebase projects:create my-html-pages --display-name "My HTML Pages"
+```
 
-In Firebase Console for your project:
-1. **Storage** → "Get started" → choose region (us-central1 recommended) → Done
-2. **Hosting** → "Get started" → follow prompts → Done
-3. **Functions** → (auto-enabled when you deploy)
+Project IDs must be globally unique, lowercase, 6–30 chars. Add a random suffix (e.g. `my-html-pages-a1b2`) if the name is taken.
 
-### Step 1.3 — Create service account
+### Step 1.2 — Link Blaze billing
 
-In Google Cloud Console → IAM & Admin → Service Accounts:
-1. Create service account named `firebase-deploy-sa`
-2. Grant role: **Storage Object Admin** (`roles/storage.objectAdmin`) — that is the only role `deploy.py` needs. The Firebase CLI deploy (Step 1.8) uses your own logged-in credentials, not this SA.
-3. Create key → JSON → download as `sa-key.json`
+Cloud Functions v2 requires Blaze. List your billing accounts and link one:
+
+```bash
+gcloud billing accounts list
+gcloud billing projects link <project-id> --billing-account=<ACCOUNT_ID>
+```
+
+> **Quota gotcha**: Each Google billing account is limited to 5 projects by default. If `gcloud billing projects link` fails with `Cloud billing quota exceeded`, either: (a) request an increase at https://support.google.com/code/contact/billing_quota_increase (typically approved within hours), (b) unlink an unused project with `gcloud billing projects unlink <other-project>`, or (c) reuse one of your existing billed projects.
+
+### Step 1.3 — Enable required GCP APIs
+
+```bash
+gcloud services enable storage.googleapis.com cloudfunctions.googleapis.com \
+  cloudbuild.googleapis.com run.googleapis.com eventarc.googleapis.com \
+  artifactregistry.googleapis.com firebasestorage.googleapis.com pubsub.googleapis.com \
+  --project=<project-id>
+```
+
+Takes ~30 seconds. Skipping any of these causes confusing errors during `firebase deploy`.
+
+### Step 1.4 — Create service account + key
+
+```bash
+gcloud iam service-accounts create firebase-deploy-sa \
+  --display-name="Firebase HTML Deploy SA" --project=<project-id>
+
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:firebase-deploy-sa@<project-id>.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin" --condition=None
+
+gcloud iam service-accounts keys create sa-key.json \
+  --iam-account="firebase-deploy-sa@<project-id>.iam.gserviceaccount.com"
+```
+
+`Storage Object Admin` is the only role `deploy.py` needs. The Firebase CLI deploy (Step 1.9) uses your own logged-in credentials, not this SA.
 
 Keep `sa-key.json` secret. Never commit it to git.
 
-### Step 1.4 — Generate TOKEN_SALT
+### Step 1.5 — Create the Storage bucket
+
+Cloud Functions reads HTML from a GCS bucket. The Firebase default bucket name `<project-id>.firebasestorage.app` is owned by Firebase's domain — `gcloud storage buckets create gs://<project-id>.firebasestorage.app` fails with a domain-ownership error. Two options:
+
+**Option A (recommended, fully scriptable):** Use any plain GCS bucket name:
+
+```bash
+gcloud storage buckets create gs://<project-id>-html \
+  --project=<project-id> --location=us-central1 \
+  --uniform-bucket-level-access
+```
+
+Use this name (`<project-id>-html`) everywhere `GCS_BUCKET` is referenced below.
+
+**Option B:** Initialize Firebase Storage's default bucket via Firebase Console → Storage → "Get started". This unlocks the `<project-id>.firebasestorage.app` bucket, but requires a browser click.
+
+### Step 1.6 — Generate TOKEN_SALT
 
 ```bash
 openssl rand -hex 32
@@ -70,18 +115,19 @@ openssl rand -hex 32
 
 Save this value. It's the master secret — tokens are derived from it. If you change it, all existing URLs break.
 
-### Step 1.5 — Create project directory
+### Step 1.7 — Create project directory
 
 ```bash
 mkdir my-firebase-pages && cd my-firebase-pages
-firebase login
-firebase init
-# Select: Hosting, Storage, Functions
-# Use existing project → select your project ID
-# Functions: JavaScript, no ESLint, don't install deps yet
 ```
 
-### Step 1.6 — Replace generated files with skill templates
+Skip `firebase init` — the wizard is interactive and we'll write the files directly in the next steps. Create `.firebaserc` to pin the project:
+
+```json
+{ "projects": { "default": "<project-id>" } }
+```
+
+### Step 1.8 — Write the project files
 
 Replace `functions/index.js` with:
 
@@ -213,47 +259,56 @@ service firebase.storage {
 }
 ```
 
-### Step 1.7 — Create `functions/.env`
-
-Find your Storage bucket name in Firebase Console → Storage → it looks like `<project-id>.firebasestorage.app`.
+### Step 1.9 — Create `functions/.env`
 
 Create `functions/.env` (gitignore this file):
 
 ```
-TOKEN_SALT=<your 64-char hex from Step 1.4>
-GCS_BUCKET=<your-project-id>.firebasestorage.app
+TOKEN_SALT=<your 64-char hex from Step 1.6>
+GCS_BUCKET=<bucket name from Step 1.5, e.g. my-project-html>
 ```
 
-### Step 1.8 — Install Cloud Function deps and deploy
+### Step 1.10 — Install Cloud Function deps and deploy
 
 ```bash
 cd functions && npm install && cd ..
-firebase deploy
+firebase deploy --only hosting,functions --project=<project-id>
 ```
 
-This deploys Hosting + Storage rules + the Cloud Function. Takes ~2 minutes on first run.
+`--only hosting,functions` skips deploying `storage.rules`, which fails on a fresh project unless Firebase Storage's default bucket has been initialized via the Console (Option B in Step 1.5). Since we're using a custom bucket gated by the SA's IAM permissions instead of Firebase Storage rules, the storage.rules deploy isn't needed.
+
+First deploy takes ~5 minutes (uploads function source, builds container image, provisions Cloud Run revision).
 
 > **Important:** `functions/.env` must be present in your project directory at deploy time — Firebase bundles it into the function. Do **not** deploy from a fresh clone without restoring this file first, or the function will return 500 ("Server configuration error") because `TOKEN_SALT` will be missing.
 
+After the deploy succeeds, set the Artifact Registry cleanup policy to avoid storage cost creep:
+
+```bash
+firebase functions:artifacts:setpolicy --project=<project-id> --force
+```
+
 Verify in Firebase Console → Functions: `servePage` should appear with status "Healthy".
 
-### Step 1.9 — Create `config.json` in the skill directory
+### Step 1.11 — Create `config.json` in the skill directory
 
 Create `~/.claude/skills/firebase-html-deploy/config.json` (it's gitignored there):
 
 ```json
 {
   "project_id": "<your-firebase-project-id>",
-  "storage_bucket": "<your-project-id>.firebasestorage.app",
-  "token_salt": "<your 64-char hex from Step 1.4>",
+  "storage_bucket": "<bucket name from Step 1.5>",
+  "token_salt": "<your 64-char hex from Step 1.6>",
   "service_account_json": <paste the full contents of sa-key.json here as an object>
 }
 ```
 
-Add `functions/.env` to your Firebase project's `.gitignore`:
+Add `functions/.env` and `secrets/` to your Firebase project's `.gitignore`:
 
 ```
 functions/.env
+functions/node_modules/
+secrets/
+.firebase/
 ```
 
 **SETUP is complete.** From now on, deploying a page is a single command from any project.
@@ -319,7 +374,12 @@ Output:
 - Re-download the key from Google Cloud Console → IAM → Service Accounts
 
 **Cloud Function cold start (slow first load):**
-- Normal. Firebase Functions v2 on Spark tier cold-starts in ~2-3 seconds. Subsequent requests are fast.
+- Normal. Firebase Functions v2 cold-starts in ~2-3 seconds. Subsequent requests are fast.
+
+**`<project-id>.web.app` returns "Site Not Found" (404) right after first deploy:**
+- Firebase Hosting CDN propagation. New sites take 5–30 minutes to serve, sometimes up to an hour.
+- The Cloud Function works immediately at `https://us-central1-<project-id>.cloudfunctions.net/servePage/pages/<ns>/<deploy>/?t=<token>` — useful for smoke testing during the wait.
+- If it persists past an hour, check `firebase hosting:sites:list` and `firebase hosting:channel:list` to confirm the live release exists.
 
 ---
 
