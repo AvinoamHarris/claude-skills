@@ -100,7 +100,7 @@ This mode runs when an engineering agent (or the user) has produced new state an
    - § 0 fields that need updating: *Where I am now*, *Next concrete action*, *Active blockers*, *Recent significant decisions*, *DO-NOT* (rare)
    - ROADMAP node states + "YOU ARE HERE" position
 6. **Edit `HANDOFF.md`** with the synthesized changes. Bump *Last updated* to current timestamp + "by handoff PM (from inbox)".
-7. **Edit `ROADMAP.html`** to mirror: change Mermaid node CSS classes (`done`/`hot`/`research`/`awaiting`/`blocked`), move "YOU ARE HERE", refresh current/next task cards, prune answered open questions.
+7. **Edit `ROADMAP.html`** to mirror: change Mermaid node CSS classes (`done`/`hot`/`research`/`awaiting`/`blocked`), move "YOU ARE HERE", refresh current/next task cards, prune answered open questions. **Before finishing, run `grep '{{' <ROADMAP_PATH>`** — any leftover `{{...}}` placeholder is a scaffold bug; fill or remove it now. Update mode catches what Fresh mode missed.
 8. **Archive consumed inbox entries.** Move every read entry from `inbox/` to `inbox/processed/<YYYY-MM>/`. Create the year-month subdir if missing. **Do not delete** — archives are forensic evidence for later audits.
 9. **Report to the user** in 5-10 lines: how many entries consumed, which § 1 rows flipped, which decisions logged, which questions resolved or opened, and where ROADMAP moved. Include the new *Next concrete action*.
 
@@ -145,7 +145,7 @@ Wait for explicit "yes". Do not create files until approved.
 ### Step 3.3 — Create the scaffold
 
 1. Create `<base>/<TASK>/HANDOFF.md` using the template in § 5.
-2. Copy the skill's `templates/ROADMAP.html` to `<base>/<TASK>/ROADMAP.html` and customize the title, current task name, and initial state.
+2. Copy the skill's `templates/ROADMAP.html` to `<base>/<TASK>/ROADMAP.html`, then **sweep every `{{...}}` placeholder and replace it with real content**. Common placeholders include `{{TASK_NAME}}` (page title + H1), `{{LAST_UPDATED}}`, `{{BRANCH}}`, `{{HEADLINE_STATUS}}`, the four KPI cells, `{{CURRENT_TASK}}` / `{{CURRENT_TASK_WHY}}` / `{{NEXT_TASK}}` / `{{NEXT_TASK_WHY}}`, the five `{{PHASE_*_SUB}}` cells, and the open-question row (`{{QUESTION_TEXT}}`, `{{QUESTION_META}}`, `{{QUESTION_OWNER}}`, `{{QUESTION_DATE}}`). If any group has no value yet, replace with `—` or remove the row outright — never leave raw template tokens in the rendered file. Run `grep '{{' <path>` after editing; the result must be empty before you consider the scaffold done.
 3. Create `<base>/<TASK>/inbox/` and `<base>/<TASK>/inbox/processed/` directories. Drop a `<base>/<TASK>/inbox/README.md` with the inbox contract (see § 4.7) so any engineering agent landing on the folder knows the format without reading this skill.
 4. Pre-fill what you know from § 3.1 (goal in § 1 Context, stakeholders in § 3 Open questions, etc.).
 
