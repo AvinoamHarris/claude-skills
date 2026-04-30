@@ -1,0 +1,8 @@
+{
+  "channel_handle": "@langtalks",
+  "channel_id": "UCWPBxQSxychk2M49Fuoq-5A",
+  "freshness_days": 7,
+  "videos_per_update_max": 50,
+  "auto_refresh_in_query": true,
+  "transparency_max_sources_listed": 12
+}

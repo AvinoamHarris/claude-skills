@@ -32,6 +32,7 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 | `bh-forever` | `/bh-forever` | Continuous bug hunting loop until convergence score ≥ 90 |
 | `codex-cli` | `/codex-cli` | Codex CLI integration |
 | `gemini` | `/gemini` | Gemini CLI integration |
+| `langtalk` | `/langtalk` | Hybrid LLM-engineering research — runs LangTalks-podcast NotebookLM query and live `WebSearch` in parallel, then synthesizes a single answer with inline `[LT*]` / `[W*]` source tags and clickable YouTube URLs. Beats pure web search by +3.50/50 on a sealed 6-question blind eval ([upstream + eval](https://github.com/yehuda-yu/langtalk-claude-skill)) |
 | `deep-verify-plan` | `/deep-verify-plan` | Deep Verify Plan — runs iterative plan QA (6-dimension scan → dedup → prove gaps → self-answer → 3-judge review → quality score 95/100) without any coding |
 | `plan-gap-finder` | `/plan-gap-finder` | Plan Gap Finder — spawns parallel agents (one per codebase area) to cross-reference a plan file against actual code; outputs a structured gap report: planned-but-missing, implemented-but-not-planned, partial |
 
