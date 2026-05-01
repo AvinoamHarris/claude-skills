@@ -33,6 +33,7 @@ Symlinks everything into the right locations. `git pull` to update — no re-ins
 | `codex-cli` | `/codex-cli` | Codex CLI integration |
 | `hebrew-rtl` | `/hebrew-rtl` | Apply RTL Hebrew rules when generating any document with Hebrew text — fixes BiDi, punctuation, layout mirroring, comma placement. Use alongside pptx-generator, minimax-docx, minimax-xlsx, or minimax-pdf. |
 | `gemini` | `/gemini` | Gemini CLI integration |
+| `handoff` | `/handoff` | Living PM skill — turns Claude into a Project Manager that maintains a continuous HANDOFF.md across sessions, sequences tasks, writes babysitter prompts for engineering agents, consumes status updates from a file-based inbox, and never writes production code itself. Prefers `.private/pm/` base path; enforces strict PM-mode role guard. |
 | `deep-verify-plan` | `/deep-verify-plan` | Deep Verify Plan — runs iterative plan QA (6-dimension scan → dedup → prove gaps → self-answer → 3-judge review → quality score 95/100) without any coding |
 | `plan-gap-finder` | `/plan-gap-finder` | Plan Gap Finder — spawns parallel agents (one per codebase area) to cross-reference a plan file against actual code; outputs a structured gap report: planned-but-missing, implemented-but-not-planned, partial |
 | `prd-to-spec` | `/prd-to-spec` | Convert an approved PRD into a phase-gated implementation SPEC with verification ledger, TDD breakpoints, and quality gates. Dispatches to `prd-to-spec.js` process via `/babysitter:call` or `/babysitter:yolo` |
