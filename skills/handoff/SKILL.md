@@ -50,26 +50,24 @@ In order, try:
 2. If no match, list folders under the resolved base path's `active/` directory (see Step 1.2). If exactly one folder, use its name.
 3. Otherwise, ask the user **once**: `What task are we working on? (e.g., PROJ-123, my-feature)`.
 
-### Step 1.2 — Auto-detect base path with gitignore enforcement
+### Step 1.2 — Auto-detect base path
 
-Try in order; **a candidate path is valid only if it is already covered by `.gitignore`**:
-1. `<repo_root>/.private/pm/` (preferred — `.claude/` has a built-in write guard in Claude Code that triggers permission prompts on every PM-folder edit)
-2. `<repo_root>/.claude/pm/` (fallback for older projects that already have this layout)
-3. `<repo_root>/docs/pm/` (only if gitignored — most projects keep `docs/` tracked, so this rarely qualifies)
+Try in order:
+1. `<repo_root>/.private/pm/` — **always valid if the directory exists or can be created**. `.private/` is a convention for project-management files that belong in the repo (versioned, visible to the team) but are separated from source code. No gitignore check required.
+2. `<repo_root>/.claude/pm/` — valid only if gitignored (Claude Code has a built-in write guard on `.claude/` that triggers permission prompts on every edit, so it must be gitignored to be usable).
+3. `<repo_root>/docs/pm/` — valid only if gitignored (most projects keep `docs/` tracked, so this rarely qualifies).
 
-For each candidate, run a check:
+For candidates 2 and 3, run a gitignore check before accepting:
 
 ```bash
 git -C <repo_root> check-ignore <candidate_path>/.gitkeep 2>&1
 ```
 
-If `git check-ignore` returns the path, the candidate is gitignored — use it. If none of the candidates is gitignored, **stop** and tell the user:
+If none of the candidates is usable, **stop** and tell the user:
 
-> No gitignored location found for HANDOFF files. Add one of these to `.gitignore`:
-> - `.claude/pm/` (recommended)
-> - `.private/pm/`
->
-> Then run `/handoff` again.
+> No valid location found for HANDOFF files. Either:
+> - Create `.private/pm/` (recommended — tracked in git, no permission prompts), or
+> - Add `.claude/pm/` to `.gitignore` and run `/handoff` again.
 
 The full HANDOFF path is `<base>/<TASK>/HANDOFF.md`.
 
